@@ -1,0 +1,5 @@
+streamlit
+pandas
+pandas_ta
+requests
+twstock
