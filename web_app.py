@@ -174,6 +174,7 @@ if selected_code:
     if df is not None:
         last = df.iloc[-1]
         
+        # 頂部資訊
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("現價", f"{last['Close']}", delta=f"{last['Close']-df['Open'].iloc[-1]:.2f}")
         col2.metric("歷史勝率", f"{win_rate}%", help="過去一年符合策略的獲利機率")
@@ -182,6 +183,7 @@ if selected_code:
 
         tab1, tab2 = st.tabs(["📊 AI 策略分析", "💰 損益試算 (含稅費)"])
 
+        # Tab 1
         with tab1:
             st.subheader("多重指標綜合評估")
             ma_ok = last['MA5'] > last['MA20']
@@ -197,22 +199,26 @@ if selected_code:
             st.line_chart(df[['Close', 'MA20']])
             st.caption("藍線: 收盤價 / 紅線: 月線 (MA20)")
 
+        # Tab 2
         with tab2:
             st.write("### 交易成本與損益試算")
             c_input1, c_input2 = st.columns(2)
             
-            if 'calc_price' not in st.session_state: st.session_state.calc_price = now_price
+            # --- 關鍵修正：確保價格不是 None，避免 TypeError ---
+            safe_price = now_price if (now_price is not None) else 0.0
+
+            if 'calc_price' not in st.session_state: st.session_state.calc_price = safe_price
             if 'calc_profit_pct' not in st.session_state: st.session_state.calc_profit_pct = 10.0
             if 'calc_loss_pct' not in st.session_state: st.session_state.calc_loss_pct = 5.0
             
             if st.button("🤖 載入 AI 停損建議 (MA20)"):
                 ma20 = last['MA20']
-                if now_price and now_price > ma20:
-                    suggested_loss = (1 - (ma20 / now_price)) * 100
+                if safe_price > 0 and safe_price > ma20:
+                    suggested_loss = (1 - (ma20 / safe_price)) * 100
                     st.session_state.calc_loss_pct = round(suggested_loss, 2)
                     st.success(f"已載入建議：月線價格 {ma20:.2f} (距離約 {suggested_loss:.2f}%)")
                 else:
-                    st.warning("目前股價已跌破月線，不適合用月線當停損。")
+                    st.warning("目前股價已跌破月線或無法取得現價，不適合用月線當停損。")
 
             cost_price = c_input1.number_input("買進價格 (元)", value=st.session_state.calc_price, key='input_price')
             profit_pct = c_input1.number_input("預設停利 (%)", value=st.session_state.calc_profit_pct, key='input_profit')
