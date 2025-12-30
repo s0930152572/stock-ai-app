@@ -24,14 +24,14 @@ requests.Session.request = new_request
 if 'watchlist' not in st.session_state:
     st.session_state.watchlist = {"2330": "台積電"}
 
-# --- 3. 資料抓取函數 (快取優化) ---
-@st.cache_data(ttl=3600)
+# --- 3. 資料抓取函數 ---
+@st.cache_data(ttl=3600) # 歷史資料快取1小時
 def fetch_history_data(code):
     data_list = []
     try:
         now = datetime.now()
         dates_to_fetch = []
-        for i in range(12): # 抓近12個月
+        for i in range(12): 
             d = now.replace(day=1) - timedelta(days=30*i)
             dates_to_fetch.append(d.strftime('%Y%m01'))
         dates_to_fetch.reverse()
@@ -67,23 +67,28 @@ def fetch_history_data(code):
     return data_list
 
 def get_realtime_price(code):
+    # 即時股價不快取，每次都重新抓
     try:
         import twstock
+        # 強制更新 twstock 的即時資料
         rt = twstock.realtime.get(code)
         if rt['success']:
             latest = rt['realtime']['latest_trade_price']
+            # 如果還沒成交(開盤前)，抓最佳買入價
             if latest == '-' and rt['realtime']['best_bid_price']:
                 latest = rt['realtime']['best_bid_price'][0]
             if latest != '-':
-                return float(latest)
+                return float(latest), rt['info']['time'] # 回傳價格跟時間
     except: pass
-    return None
+    return None, None
 
 # --- 4. 策略分析邏輯 ---
 def run_strategy_analysis(code, name):
     hist_list = fetch_history_data(code)
     
-    current_price = get_realtime_price(code)
+    current_price, data_time = get_realtime_price(code)
+    
+    # 模擬將即時資料加入歷史K線
     if current_price:
         hist_list.append({
             'Date': datetime.now(),
@@ -92,7 +97,7 @@ def run_strategy_analysis(code, name):
         })
 
     if len(hist_list) < 30:
-        return None, "資料不足", 0
+        return None, "資料不足", 0, None
 
     df = pd.DataFrame(hist_list)
     df.set_index('Date', inplace=True)
@@ -135,11 +140,17 @@ def run_strategy_analysis(code, name):
         if df['Close'].iloc[-1] > entry_price: win_count += 1
         
     win_rate = int((win_count/trade_count)*100) if trade_count > 0 else 0
-    return df, win_rate, current_price
+    return df, win_rate, current_price, data_time
 
 # --- 5. 介面佈局 ---
 with st.sidebar:
     st.header("📋 自選股清單")
+    
+    # 📌 這裡新增了刷新按鈕
+    if st.button("🔄 立即刷新股價", type="primary"):
+        st.rerun()
+    st.caption(f"最後更新: {datetime.now().strftime('%H:%M:%S')}")
+    st.markdown("---")
     
     c1, c2 = st.columns([2, 1])
     new_code = c1.text_input("股票代號", placeholder="2330", label_visibility="collapsed")
@@ -155,7 +166,7 @@ with st.sidebar:
                 except: st.error("無效代號")
 
     selected_code = st.radio(
-        "選擇股票進行分析：",
+        "選擇股票：",
         options=list(st.session_state.watchlist.keys()),
         format_func=lambda x: f"{x} {st.session_state.watchlist[x]}"
     )
@@ -168,22 +179,29 @@ if selected_code:
     name = st.session_state.watchlist[selected_code]
     st.title(f"{name} ({selected_code})")
     
-    with st.spinner(f"正在分析 {name} 的歷史數據與籌碼..."):
-        df, win_rate, now_price = run_strategy_analysis(selected_code, name)
+    with st.spinner(f"正在連線證交所抓取 {name} 最新報價..."):
+        df, win_rate, now_price, data_time = run_strategy_analysis(selected_code, name)
 
     if df is not None:
         last = df.iloc[-1]
         
-        # 頂部資訊
+        # 顯示更新時間
+        if data_time:
+            st.caption(f"⏰ 報價時間: {data_time} (請按左側刷新按鈕獲取最新)")
+        
         col1, col2, col3, col4 = st.columns(4)
-        col1.metric("現價", f"{last['Close']}", delta=f"{last['Close']-df['Open'].iloc[-1]:.2f}")
+        
+        # 價格變色邏輯
+        price_color = "normal"
+        delta_val = last['Close'] - df['Open'].iloc[-1]
+        
+        col1.metric("現價", f"{last['Close']}", delta=f"{delta_val:.2f}")
         col2.metric("歷史勝率", f"{win_rate}%", help="過去一年符合策略的獲利機率")
         col3.metric("KD 指標", f"K{last['K']:.1f}", f"D{last['D']:.1f}")
         col4.metric("乖離率", f"{last['Bias']:.2f}%", "正乖離過大需小心" if last['Bias']>5 else "正常")
 
         tab1, tab2 = st.tabs(["📊 AI 策略分析", "💰 損益試算 (含稅費)"])
 
-        # Tab 1
         with tab1:
             st.subheader("多重指標綜合評估")
             ma_ok = last['MA5'] > last['MA20']
@@ -199,12 +217,11 @@ if selected_code:
             st.line_chart(df[['Close', 'MA20']])
             st.caption("藍線: 收盤價 / 紅線: 月線 (MA20)")
 
-        # Tab 2
         with tab2:
             st.write("### 交易成本與損益試算")
             c_input1, c_input2 = st.columns(2)
             
-            # --- 關鍵修正：確保價格不是 None，避免 TypeError ---
+            # 防呆：如果現價抓不到，預設為 0
             safe_price = now_price if (now_price is not None) else 0.0
 
             if 'calc_price' not in st.session_state: st.session_state.calc_price = safe_price
@@ -218,7 +235,7 @@ if selected_code:
                     st.session_state.calc_loss_pct = round(suggested_loss, 2)
                     st.success(f"已載入建議：月線價格 {ma20:.2f} (距離約 {suggested_loss:.2f}%)")
                 else:
-                    st.warning("目前股價已跌破月線或無法取得現價，不適合用月線當停損。")
+                    st.warning("目前股價已跌破月線，不適合用月線當停損。")
 
             cost_price = c_input1.number_input("買進價格 (元)", value=st.session_state.calc_price, key='input_price')
             profit_pct = c_input1.number_input("預設停利 (%)", value=st.session_state.calc_profit_pct, key='input_profit')
@@ -252,7 +269,4 @@ if selected_code:
                     st.error(f"🔴 停利目標：{target_price:.2f} 元")
                     st.write(f"扣除稅費後實賺： **${net_profit:,.0f}**")
                 with res_col2:
-                    st.success(f"🟢 停損防守：{stop_price:.2f} 元")
-                    st.write(f"扣除稅費後實賠： **${net_loss:,.0f}**")
-                    
-                st.caption(f"交易總成本 (含買入手續費): ${total_cost:,.0f}")
+                    st.success(f"🟢 停損防守：{
