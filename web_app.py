@@ -146,7 +146,7 @@ def run_strategy_analysis(code, name):
 with st.sidebar:
     st.header("📋 自選股清單")
     
-    # 📌 這裡新增了刷新按鈕
+    # 📌 刷新按鈕
     if st.button("🔄 立即刷新股價", type="primary"):
         st.rerun()
     st.caption(f"最後更新: {datetime.now().strftime('%H:%M:%S')}")
@@ -192,7 +192,6 @@ if selected_code:
         col1, col2, col3, col4 = st.columns(4)
         
         # 價格變色邏輯
-        price_color = "normal"
         delta_val = last['Close'] - df['Open'].iloc[-1]
         
         col1.metric("現價", f"{last['Close']}", delta=f"{delta_val:.2f}")
@@ -269,4 +268,10 @@ if selected_code:
                     st.error(f"🔴 停利目標：{target_price:.2f} 元")
                     st.write(f"扣除稅費後實賺： **${net_profit:,.0f}**")
                 with res_col2:
-                    st.success(f"🟢 停損防守：{
+                    st.success(f"🟢 停損防守：{stop_price:.2f} 元")
+                    st.write(f"扣除稅費後實賠： **${net_loss:,.0f}**")
+                    
+                st.caption(f"交易總成本 (含買入手續費): ${total_cost:,.0f}")
+                
+# --- 確認複製完整標記 ---
+print("程式執行完畢：如果你看到這行，代表程式碼複製完整了！")
