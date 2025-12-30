@@ -21,13 +21,11 @@ def new_request(self, method, url, *args, **kwargs):
 requests.Session.request = new_request
 
 # --- 2. 檔案存取 (Watchlist) ---
-# 在 Streamlit Cloud 上，因為無法永久存檔，我們改用 Session State 暫存
-# 如果需要永久存檔，需要連接 Google Sheets 或資料庫，這裡先做簡易版
 if 'watchlist' not in st.session_state:
     st.session_state.watchlist = {"2330": "台積電"}
 
 # --- 3. 資料抓取函數 (快取優化) ---
-@st.cache_data(ttl=3600) # 設定快取 1 小時，避免重複一直抓
+@st.cache_data(ttl=3600)
 def fetch_history_data(code):
     data_list = []
     try:
@@ -85,7 +83,6 @@ def get_realtime_price(code):
 def run_strategy_analysis(code, name):
     hist_list = fetch_history_data(code)
     
-    # 補上即時資料 (如果有的話)
     current_price = get_realtime_price(code)
     if current_price:
         hist_list.append({
@@ -100,7 +97,6 @@ def run_strategy_analysis(code, name):
     df = pd.DataFrame(hist_list)
     df.set_index('Date', inplace=True)
 
-    # 指標計算
     df['MA5'] = ta.sma(df['Close'], length=5)
     df['MA20'] = ta.sma(df['Close'], length=20)
     df['RSI'] = ta.rsi(df['Close'], length=14)
@@ -114,7 +110,6 @@ def run_strategy_analysis(code, name):
     
     df['Bias'] = ((df['Close'] - df['MA20']) / df['MA20']) * 100
     
-    # 回測邏輯
     df['Signal'] = 0
     buy_cond = ((df['MA5'] > df['MA20']) & (df['K'] > df['D']) & (df['RSI'] < 80) & (df['Bias'] < 6))
     sell_cond = ((df['Close'] < df['MA20']) | (df['K'] < df['D']))
@@ -125,7 +120,6 @@ def run_strategy_analysis(code, name):
     df.loc[entry_signal, 'Signal'] = 1
     df.loc[exit_signal, 'Signal'] = -1
     
-    # 計算勝率
     position = 0; entry_price = 0; win_count = 0; trade_count = 0
     for i in range(len(df)):
         sig = df['Signal'].iloc[i]
@@ -144,12 +138,9 @@ def run_strategy_analysis(code, name):
     return df, win_rate, current_price
 
 # --- 5. 介面佈局 ---
-
-# 側邊欄：股票清單
 with st.sidebar:
     st.header("📋 自選股清單")
     
-    # 新增股票
     c1, c2 = st.columns([2, 1])
     new_code = c1.text_input("股票代號", placeholder="2330", label_visibility="collapsed")
     if c2.button("加入"):
@@ -163,7 +154,6 @@ with st.sidebar:
                     st.rerun()
                 except: st.error("無效代號")
 
-    # 顯示清單
     selected_code = st.radio(
         "選擇股票進行分析：",
         options=list(st.session_state.watchlist.keys()),
@@ -174,33 +164,26 @@ with st.sidebar:
         del st.session_state.watchlist[selected_code]
         st.rerun()
 
-# 主畫面
 if selected_code:
     name = st.session_state.watchlist[selected_code]
     st.title(f"{name} ({selected_code})")
     
-    # 執行分析
     with st.spinner(f"正在分析 {name} 的歷史數據與籌碼..."):
         df, win_rate, now_price = run_strategy_analysis(selected_code, name)
 
     if df is not None:
         last = df.iloc[-1]
         
-        # 頂部資訊卡
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("現價", f"{last['Close']}", delta=f"{last['Close']-df['Open'].iloc[-1]:.2f}")
         col2.metric("歷史勝率", f"{win_rate}%", help="過去一年符合策略的獲利機率")
         col3.metric("KD 指標", f"K{last['K']:.1f}", f"D{last['D']:.1f}")
         col4.metric("乖離率", f"{last['Bias']:.2f}%", "正乖離過大需小心" if last['Bias']>5 else "正常")
 
-        # 分頁功能
         tab1, tab2 = st.tabs(["📊 AI 策略分析", "💰 損益試算 (含稅費)"])
 
-        # --- Tab 1: AI 分析報告 ---
         with tab1:
             st.subheader("多重指標綜合評估")
-            
-            # 判斷訊號
             ma_ok = last['MA5'] > last['MA20']
             kd_ok = last['K'] > last['D']
             rsi_ok = last['RSI'] < 80
@@ -211,23 +194,59 @@ if selected_code:
             cond_text += "✅ RSI 指標健康 (未過熱)\n" if rsi_ok else "⚠️ RSI 過熱 (可能拉回)\n"
             
             st.text_area("策略詳情", cond_text, height=150)
-            
             st.line_chart(df[['Close', 'MA20']])
             st.caption("藍線: 收盤價 / 紅線: 月線 (MA20)")
 
-        # --- Tab 2: 損益試算 (含 AI 建議) ---
         with tab2:
             st.write("### 交易成本與損益試算")
-            
             c_input1, c_input2 = st.columns(2)
             
-            # 使用 session_state 來儲存建議值
             if 'calc_price' not in st.session_state: st.session_state.calc_price = now_price
             if 'calc_profit_pct' not in st.session_state: st.session_state.calc_profit_pct = 10.0
             if 'calc_loss_pct' not in st.session_state: st.session_state.calc_loss_pct = 5.0
             
-            # AI 建議按鈕 logic
             if st.button("🤖 載入 AI 停損建議 (MA20)"):
                 ma20 = last['MA20']
                 if now_price and now_price > ma20:
-                    suggested_loss =
+                    suggested_loss = (1 - (ma20 / now_price)) * 100
+                    st.session_state.calc_loss_pct = round(suggested_loss, 2)
+                    st.success(f"已載入建議：月線價格 {ma20:.2f} (距離約 {suggested_loss:.2f}%)")
+                else:
+                    st.warning("目前股價已跌破月線，不適合用月線當停損。")
+
+            cost_price = c_input1.number_input("買進價格 (元)", value=st.session_state.calc_price, key='input_price')
+            profit_pct = c_input1.number_input("預設停利 (%)", value=st.session_state.calc_profit_pct, key='input_profit')
+            loss_pct = c_input2.number_input("預設停損 (%)", value=st.session_state.calc_loss_pct, key='input_loss')
+            
+            st.markdown("---")
+            
+            if cost_price > 0:
+                shares = 1000
+                fee_rate = 0.001425
+                tax_rate = 0.003
+                
+                buy_val = cost_price * shares
+                buy_fee = max(20, math.floor(buy_val * fee_rate))
+                total_cost = buy_val + buy_fee
+                
+                target_price = cost_price * (1 + profit_pct / 100)
+                sell_val_win = target_price * shares
+                sell_fee_win = math.floor(sell_val_win * fee_rate)
+                sell_tax_win = math.floor(sell_val_win * tax_rate)
+                net_profit = sell_val_win - sell_fee_win - sell_tax_win - total_cost
+                
+                stop_price = cost_price * (1 - loss_pct / 100)
+                sell_val_loss = stop_price * shares
+                sell_fee_loss = math.floor(sell_val_loss * fee_rate)
+                sell_tax_loss = math.floor(sell_val_loss * tax_rate)
+                net_loss = sell_val_loss - sell_fee_loss - sell_tax_loss - total_cost
+
+                res_col1, res_col2 = st.columns(2)
+                with res_col1:
+                    st.error(f"🔴 停利目標：{target_price:.2f} 元")
+                    st.write(f"扣除稅費後實賺： **${net_profit:,.0f}**")
+                with res_col2:
+                    st.success(f"🟢 停損防守：{stop_price:.2f} 元")
+                    st.write(f"扣除稅費後實賠： **${net_loss:,.0f}**")
+                    
+                st.caption(f"交易總成本 (含買入手續費): ${total_cost:,.0f}")
